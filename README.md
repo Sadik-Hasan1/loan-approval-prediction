@@ -2,7 +2,7 @@
 
 # 🏦 Loan Approval Prediction Using Machine Learning
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-Try%20the%20App-46E3B7?logo=render&logoColor=white)](https://loan-approval-prediction-1u78.onrender.com/)
-**Three models. One stratified split. 4,269 loan applications.**  
+**Three models. One stratified split. 4,241 cleaned loan records.**  
 A machine learning project comparing classification algorithms for predicting the `Approved` / `Rejected` loan-status label, with categorical encoding, model evaluation, and an interactive demo.
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Sadik-Hasan1/loan-approval-prediction/blob/main/Loan_Approval_Prediction_%20(1).ipynb)
