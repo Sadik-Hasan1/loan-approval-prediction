@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Dataset and generated artifacts (add intentionally if your project requires them)
+*.csv
+*.zip
+*.joblib
