@@ -377,6 +377,137 @@ input:focus, textarea:focus, select:focus { border-color:#2ac4aa !important;box-
 .disclaimer-banner strong { color:#e0c28c; }
 @media (max-width: 850px) { .gradio-container {padding:12px 12px 26px !important;} .hero {padding:24px 22px;border-radius:21px;} .hero-layout {align-items:flex-start;flex-direction:column;} .hero-side {width:100%;flex:1;} .hero-side-value {font-size:32px;} .panel {padding:16px !important;} .section-kicker {margin-top:19px;} .result-card {min-height:unset;} .footer {flex-direction:column;align-items:flex-start;} }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after {transition:none !important;animation:none !important;scroll-behavior:auto !important;} }
+
+/* Premium Emerald Glass Theme */
+:root {
+  --bg: #10251f;
+  --panel: rgba(24, 53, 43, 0.78);
+  --panel-2: rgba(35, 69, 56, 0.72);
+  --line: rgba(218, 197, 151, 0.22);
+  --ink: #f5f2e9;
+  --muted: #c0cbbf;
+  --mint: #d9bd7e;
+  --teal: #4eb99a;
+  --gold: #e1c58b;
+}
+
+html, body,
+body .gradio-container {
+  background:
+    radial-gradient(ellipse at 10% 0%, rgba(61, 133, 99, 0.25), transparent 40%),
+    radial-gradient(ellipse at 95% 30%, rgba(195, 161, 94, 0.12), transparent 36%),
+    #10251f !important;
+  color: #f5f2e9 !important;
+}
+
+.hero {
+  background: linear-gradient(
+    125deg,
+    rgba(17, 48, 38, 0.96),
+    rgba(35, 83, 63, 0.91),
+    rgba(79, 111, 78, 0.82)
+  ) !important;
+  border-color: rgba(218, 197, 151, 0.28) !important;
+  backdrop-filter: blur(22px);
+}
+
+.hero h1 em,
+.hero-side-value,
+.result-ornament,
+.probability-value {
+  color: #e3c98e !important;
+}
+
+.hero-side,
+.panel,
+.result-card,
+.probability-card,
+.insight-metric,
+.method-card,
+.note-card {
+  background: rgba(229, 239, 229, 0.065) !important;
+  border: 1px solid rgba(218, 225, 202, 0.17) !important;
+  backdrop-filter: blur(18px);
+  box-shadow:
+    0 12px 35px rgba(0, 0, 0, 0.15),
+    inset 0 1px rgba(255, 255, 255, 0.06) !important;
+}
+
+input,
+textarea,
+.wrap input,
+.wrap textarea,
+.wrap select,
+select {
+  background: rgba(10, 34, 26, 0.72) !important;
+  color: #f5f2e9 !important;
+  border: 1px solid rgba(218, 197, 151, 0.23) !important;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: #d9bd7e !important;
+  box-shadow: 0 0 0 2px rgba(217, 189, 126, 0.15) !important;
+}
+
+.predict-btn {
+  background: linear-gradient(110deg, #c8a967, #e5d2a1) !important;
+  color: #17372b !important;
+  box-shadow: 0 8px 24px rgba(200, 169, 103, 0.17) !important;
+}
+
+.predict-btn:hover {
+  background: linear-gradient(110deg, #d8bb7b, #f0dfb4) !important;
+}
+
+.reset-btn,
+.preset-btn {
+  background: rgba(220, 235, 223, 0.07) !important;
+  color: #e9e9dc !important;
+  border-color: rgba(218, 197, 151, 0.22) !important;
+}
+
+.micro-badge,
+.metric-tag {
+  color: #e1c58b !important;
+  background: rgba(217, 189, 126, 0.08) !important;
+  border-color: rgba(217, 189, 126, 0.24) !important;
+}
+
+.probability-track,
+.importance-track {
+  background: rgba(224, 235, 222, 0.12) !important;
+}
+
+.probability-fill,
+.importance-fill {
+  background: linear-gradient(90deg, #3a9875, #9bd4a8) !important;
+}
+
+.result-approved {
+  border-color: rgba(123, 211, 161, 0.35) !important;
+}
+
+.result-rejected,
+.result-error {
+  border-color: rgba(231, 143, 130, 0.32) !important;
+}
+
+@media (max-width: 850px) {
+  .hero {
+    padding: 22px 18px !important;
+  }
+
+  .panel {
+    padding: 15px !important;
+  }
+
+  .hero-layout {
+    gap: 18px;
+  }
+}
+
 """
 
 THEME = gr.themes.Base(
