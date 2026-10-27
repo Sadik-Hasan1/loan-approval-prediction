@@ -150,6 +150,60 @@ def metric_detail(metric: str) -> str:
     title, value, explanation = METRIC_EXPLANATIONS.get(metric, METRIC_EXPLANATIONS["Accuracy"])
     return f'<div class="insight-detail"><div class="insight-kicker">METRIC EXPLORER</div><div class="insight-detail-head"><h3>{html.escape(metric)}</h3><span class="insight-score">{value}</span></div><div class="insight-label">{html.escape(title)}</div><p>{html.escape(explanation)}</p><div class="insight-foot">Reported test-split metric · results may differ on new data</div></div>'
 
+
+def compare_features(feature_a: str, feature_b: str) -> str:
+    values = dict(FEATURE_IMPORTANCE)
+    a, b = values.get(feature_a, 0.0), values.get(feature_b, 0.0)
+    maximum = max(values.values()) or 1.0
+    gap = abs(a - b)
+    return (f'<div class="compare-grid"><div class="compare-item"><div class="compare-label">{html.escape(feature_a)}</div>'
+            f'<div class="compare-value">{a:.2f}%</div><div class="compare-track"><i style="width:{a/maximum*100:.2f}%"></i></div></div>'
+            f'<div class="compare-item"><div class="compare-label">{html.escape(feature_b)}</div>'
+            f'<div class="compare-value">{b:.2f}%</div><div class="compare-track"><i style="width:{b/maximum*100:.2f}%"></i></div></div>'
+            f'<div class="compare-summary">Absolute importance gap <b>{gap:.2f} percentage points</b>. Global importance is not an applicant-level effect or proof of causation.</div></div>')
+
+
+def what_if_lab(cibil_score: float, loan_term: float, loan_amount: float) -> str:
+    """Run actual saved-model inference for a controlled illustrative profile."""
+    try:
+        cibil_score, loan_term, loan_amount = int(cibil_score), int(loan_term), int(loan_amount)
+        if not 300 <= cibil_score <= 900:
+            return '<div class="lab-result error">CIBIL score must be between 300 and 900.</div>'
+        if not 2 <= loan_term <= 20:
+            return '<div class="lab-result error">Loan term must be between 2 and 20 years.</div>'
+        if loan_amount < 0:
+            return '<div class="lab-result error">Loan amount cannot be negative.</div>'
+        values = [2, "Graduate", "No", 5_000_000, loan_amount, loan_term, cibil_score,
+                  5_000_000, 2_000_000, 8_000_000, 3_000_000]
+        frame = pd.DataFrame([dict(zip(FEATURE_COLUMNS, values))], columns=FEATURE_COLUMNS)
+        if PIPELINE is not None:
+            prediction = PIPELINE.predict(frame)[0]
+            probabilities = PIPELINE.predict_proba(frame)[0] if hasattr(PIPELINE, "predict_proba") else None
+            classes = list(getattr(PIPELINE, "classes_", []))
+        else:
+            transformed = PREPROCESSOR.transform(frame)
+            prediction = MODEL.predict(transformed)[0]
+            probabilities = MODEL.predict_proba(transformed)[0] if hasattr(MODEL, "predict_proba") else None
+            classes = list(getattr(MODEL, "classes_", []))
+        approved = _is_approved(prediction)
+        probability = None
+        if probabilities is not None and classes:
+            idx = next((i for i, label in enumerate(classes) if _is_approved(label)), None)
+            if idx is not None:
+                probability = float(probabilities[idx]) * 100
+        status = "Approved" if approved else "Rejected"
+        state_class = "good" if approved else "bad"
+        prob_text = f"{probability:.2f}%" if probability is not None else "Not exposed by model"
+        width = f"{probability:.2f}%" if probability is not None else "0%"
+        return (f'<div class="lab-result"><div class="lab-result-top"><span class="lab-label">MODEL OUTPUT · ILLUSTRATIVE PROFILE</span>'
+                f'<span class="lab-status {state_class}">{status}</span></div><div class="lab-prob">{prob_text}</div>'
+                f'<div class="lab-track"><i style="width:{width}"></i></div>'
+                f'<p>Scenario: CIBIL <b>{cibil_score}</b> · Loan term <b>{loan_term}</b> years · Loan amount <b>{loan_amount:,}</b> source units.</p>'
+                f'<div class="detail-callout"><b>Interpretation</b><br>This is a new inference from the saved model. Other fields are held at illustrative defaults. Change one slider at a time to explore sensitivity; this is not a causal explanation or real lending advice.</div></div>')
+    except Exception:
+        LOGGER.exception("What-if lab failed")
+        return '<div class="lab-result error">The model could not evaluate this scenario. Check the saved model artifact and server logs.</div>'
+
 CSS = r"""
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
 :root{--bg:#0b2118;--line:rgba(222,201,153,.19);--ink:#f6f3e9;--gold:#dec18a;--emerald:#70c69a}
@@ -186,6 +240,45 @@ label,.wrap label,.label-wrap{color:#c3d0bd!important;font-size:9px!important;fo
 @media(max-width:760px){.sidebar{padding:12px 13px;min-height:0}.brand{padding-bottom:12px}.sidebar .nav-label{display:none}.sidebar button.nav-item{display:inline-flex;width:auto;vertical-align:middle;white-space:nowrap;margin:10px 4px 0 0;padding:7px 9px;gap:7px}.sidebar .nav-icon{width:22px;height:22px;flex-basis:22px}.sidebar-bottom{display:block;margin-top:12px}.sidebar-bottom p{margin-top:4px}.panel .row{gap:9px!important}.hero h1{letter-spacing:-1px!important}.metric-tile{min-height:88px;padding:12px}.metric-value{font-size:21px}}
 @media(max-width:430px){.sidebar button.nav-item{font-size:9px;padding:7px 8px}.sidebar .nav-icon{display:none}.section-heading{flex-wrap:wrap}.tag{white-space:normal}.panel-subtitle{margin-left:0}.hero{border-radius:18px}.hero-side{flex-basis:auto}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+
+/* Interactive Model Insights + What-if Lab */
+.insights-hero{position:relative;overflow:hidden;padding:24px;border:1px solid #dec18a44;border-radius:21px;background:radial-gradient(circle at 90% 0%,#dec18a1b,transparent 35%),linear-gradient(125deg,#214d37,#10291f 72%);margin-bottom:16px}
+.insights-hero .kicker{font-size:8px;letter-spacing:1.8px;color:#b5d5be;font-weight:900}
+.insights-hero h3{font:800 clamp(22px,2.5vw,32px)/1.15 Manrope,sans-serif;color:#f4f1e5;margin:9px 0}
+.insights-hero h3 em{font-style:normal;color:#e5cb91}
+.insights-hero p{max-width:760px;color:#b4c9b8;font-size:10px;line-height:1.9;margin:0}
+.insight-section{margin:20px 0 11px;display:flex;justify-content:space-between;gap:12px;align-items:end}
+.insight-section h3{font:800 15px Manrope,sans-serif;color:#f1efdf;margin:0}
+.insight-section p{font-size:9px;color:#91a997;line-height:1.7;margin:5px 0 0}
+.insights-panel{padding:17px;border-radius:16px;border:1px solid #dec18a2b;background:linear-gradient(145deg,#1c3c2ccf,#0d251bcf);height:100%;box-sizing:border-box}
+.insights-panel-title{font:800 11px Manrope,sans-serif;color:#f0efdf;margin-bottom:5px}
+.insights-panel-sub{font-size:9px;color:#91a997;line-height:1.7;margin-bottom:13px}
+.insight-detail,.lab-result,.compare-grid{padding:16px;border:1px solid #dec18a2a;border-radius:14px;background:linear-gradient(145deg,#1d3d2cbf,#0c2419c9);min-height:140px}
+.detail-kicker,.lab-label{font-size:8px;font-weight:900;letter-spacing:1.3px;color:#9fc9ad}
+.detail-title{display:flex;justify-content:space-between;align-items:center;gap:10px;font:800 18px Manrope,sans-serif;color:#f2efdf;margin:11px 0}
+.detail-title span{color:#e4ca90;white-space:nowrap}
+.insight-detail p,.lab-result p{font-size:10px;line-height:1.9;color:#b0c2b1;margin:12px 0}
+.detail-callout{border:1px solid #dec18a25;background:#dec18a0c;border-radius:11px;padding:11px 12px;color:#aabcae;font-size:9px;line-height:1.8;margin-top:12px}
+.detail-callout b{color:#e2ca91}
+.feature-meter,.compare-track,.lab-track{height:7px;border-radius:99px;overflow:hidden;background:#e5eee21a;margin:12px 0}
+.feature-meter i,.compare-track i,.lab-track i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#58b184,#e4ca90);transition:width .3s ease}
+.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}
+.compare-item{padding:13px;border:1px solid #dec18a1c;border-radius:12px;background:#ffffff05}
+.compare-label{font-size:9px;color:#b1c3b2;font-weight:800}
+.compare-value{font:800 23px Manrope,sans-serif;color:#e5cc91;margin-top:8px}
+.compare-summary{grid-column:1/-1;color:#a9bcac;font-size:9px;line-height:1.8;padding:11px 2px 0;border-top:1px solid #dec18a1d}
+.compare-summary b{color:#e5cc91}
+.lab-result{min-height:unset}
+.lab-result-top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.lab-status{font:800 12px Manrope,sans-serif;padding:7px 11px;border-radius:999px}
+.lab-status.good{color:#9de4b6;background:#6ac68d19;border:1px solid #6ac68d3b}
+.lab-status.bad{color:#f1b0a5;background:#d77d6f19;border:1px solid #d77d6f3b}
+.lab-prob{font:800 32px Manrope,sans-serif;color:#e5cc91;margin-top:12px;letter-spacing:-1px}
+.lab-result.error{color:#f1b0a5;border-color:#d77d6f44}
+.insight-note{padding:12px 14px;border-radius:12px;border:1px solid #dec18a27;background:#dec18a0b;color:#a8bcab;font-size:9px;line-height:1.8;margin-top:12px}
+.insight-note strong{color:#e5cc91}
+@media(max-width:760px){.insights-hero{padding:18px}.compare-grid{grid-template-columns:1fr}.compare-summary{grid-column:1}.detail-title{font-size:16px}.lab-prob{font-size:28px}}
+
 """
 
 THEME = gr.themes.Base(primary_hue=gr.themes.colors.emerald, secondary_hue=gr.themes.colors.amber, neutral_hue=gr.themes.colors.stone, radius_size="lg", spacing_size="lg")
@@ -248,26 +341,50 @@ with gr.Blocks(theme=THEME, css=CSS, title="CrediSense | Loan Approval Predictio
                     for button, profile in [(balanced_btn,"Balanced sample"),(strong_btn,"Strong credit profile"),(low_score_btn,"Lower credit score")]:
                         button.click(fn=lambda p=profile: apply_profile(p), inputs=None, outputs=input_components, api_name=f"load_{profile.lower().replace(' ','_')}")
                 with gr.Tab("▤ Model insights"):
-                    gr.HTML('<div class="section-heading"><div><h2>Evaluation snapshot</h2><p>Reported metrics from the held-out test split. Select a metric below to understand what it means.</p></div><span class="tag">637 TEST ROWS</span></div>')
+                    gr.HTML('<section class="insights-hero"><div class="kicker">CREDISENSE · MODEL INTELLIGENCE STUDIO</div><h3>See the signal.<br><em>Explore the decision.</em></h3><p>Explore evaluation metrics, inspect global feature importance, compare features side by side, and run controlled what-if scenarios with the saved model. Slider scenarios use illustrative defaults for fields that are not exposed in the lab.</p></section>')
+                    gr.HTML('<div class="insight-section"><div><h3>Performance at a glance</h3><p>Reported held-out test metrics for the current project.</p></div><span class="tag">MODEL EVALUATION</span></div>')
                     with gr.Row():
-                        gr.HTML(metric_card(f"{TEST_METRICS['F1-score']:.2f}%","F1-score","Balance of precision and recall"))
-                        gr.HTML(metric_card(f"{TEST_METRICS['ROC-AUC']:.2f}%","ROC-AUC","Class separation metric"))
+                        for value, label, note in [(f"{TEST_METRICS['Accuracy']:.2f}%","Accuracy","Overall correct predictions"),(f"{TEST_METRICS['Precision']:.2f}%","Precision","Correct predicted approvals"),(f"{TEST_METRICS['Recall']:.2f}%","Recall","Approved cases identified"),(f"{TEST_METRICS['F1-score']:.2f}%","F1-score","Precision–recall balance"),(f"{TEST_METRICS['ROC-AUC']:.2f}%","ROC-AUC","Class ranking separation")]:
+                            gr.HTML(metric_card(value,label,note))
                     with gr.Row(equal_height=False):
-                        with gr.Column(scale=6, min_width=260):
-                            with gr.Group(elem_classes=["panel"]):
-                                gr.HTML('<div class="panel-heading"><span class="panel-index">A</span><div class="panel-title">Global feature importance</div></div><div class="panel-subtitle">Choose a feature to explore its reported score and a plain-language interpretation.</div>')
-                                gr.HTML(importance_bars())
-                                feature_picker = gr.Dropdown(choices=[name for name, _ in FEATURE_IMPORTANCE], value="CIBIL score", label="Explore a feature", interactive=True)
-                                feature_detail_output = gr.HTML(value=feature_detail("CIBIL score"))
-                                feature_picker.change(fn=feature_detail, inputs=feature_picker, outputs=feature_detail_output, show_progress="hidden")
-                        with gr.Column(scale=6, min_width=260):
-                            with gr.Group(elem_classes=["panel"]):
-                                gr.HTML('<div class="panel-heading"><span class="panel-index">B</span><div class="panel-title">Metric explorer</div></div><div class="panel-subtitle">Choose a test metric to learn what it measures and what it cannot tell you.</div>')
-                                metric_picker = gr.Dropdown(choices=list(METRIC_EXPLANATIONS.keys()), value="Accuracy", label="Explore a metric", interactive=True)
+                        with gr.Column(scale=5, min_width=250):
+                            with gr.Group(elem_classes=["insights-panel"]):
+                                gr.HTML('<div class="insights-panel-title">Metric explorer</div><div class="insights-panel-sub">Choose a metric to learn what it measures and what it cannot tell you.</div>')
+                                metric_picker = gr.Dropdown(choices=list(METRIC_EXPLANATIONS.keys()), value="Accuracy", label="Select evaluation metric", interactive=True)
                                 metric_detail_output = gr.HTML(value=metric_detail("Accuracy"))
                                 metric_picker.change(fn=metric_detail, inputs=metric_picker, outputs=metric_detail_output, show_progress="hidden")
-                                gr.HTML('<div class="method-card" style="margin-top:14px"><div class="method-title">Methodology at a glance</div><p class="method-copy">The project compares Logistic Regression, Decision Tree, and Random Forest; Random Forest is selected for the final held-out test evaluation.</p><div class="method-list"><div class="method-item"><span class="method-check">✓</span><span><b>Data cleaning</b><br>Removed records with invalid negative asset values.</span></div><div class="method-item"><span class="method-check">✓</span><span><b>Preprocessing</b><br>Median imputation and standardization for numeric fields; one-hot encoding for categorical fields.</span></div><div class="method-item"><span class="method-check">✓</span><span><b>Evaluation</b><br>Stratified train/validation/test split with classification metrics and ROC-AUC.</span></div><div class="method-item"><span class="method-check">✓</span><span><b>Deployment</b><br>Interactive Gradio interface hosted as a Render web service.</span></div></div></div>')
-                    gr.HTML('<div class="disclaimer-banner"><strong>Limitations & responsible use.</strong> Metrics describe this dataset and held-out split only. They do not establish fairness, explainability, calibration, or performance at a real lender. This academic app should not be used to approve or reject actual applications.</div>')
+                        with gr.Column(scale=7, min_width=280):
+                            with gr.Group(elem_classes=["insights-panel"]):
+                                gr.HTML('<div class="insights-panel-title">Feature explorer</div><div class="insights-panel-sub">Inspect the reported importance and a plain-language explanation for each feature.</div>')
+                                feature_names = [name for name, _ in FEATURE_IMPORTANCE]
+                                feature_picker = gr.Dropdown(choices=feature_names, value="CIBIL score", label="Select feature", interactive=True)
+                                feature_detail_output = gr.HTML(value=feature_detail("CIBIL score"))
+                                feature_picker.change(fn=feature_detail, inputs=feature_picker, outputs=feature_detail_output, show_progress="hidden")
+                    gr.HTML('<div class="insight-section"><div><h3>Compare model signals</h3><p>Compare reported global importance values side by side.</p></div><span class="tag">COMPARISON</span></div>')
+                    with gr.Group(elem_classes=["insights-panel"]):
+                        with gr.Row():
+                            compare_a = gr.Dropdown(choices=feature_names, value="CIBIL score", label="Feature A", interactive=True)
+                            compare_b = gr.Dropdown(choices=feature_names, value="Loan term", label="Feature B", interactive=True)
+                        compare_output = gr.HTML(value=compare_features("CIBIL score", "Loan term"))
+                        compare_button = gr.Button("Compare features ↗", elem_classes=["predict-btn"])
+                        compare_button.click(fn=compare_features, inputs=[compare_a, compare_b], outputs=compare_output, show_progress="hidden")
+                        compare_a.change(fn=compare_features, inputs=[compare_a, compare_b], outputs=compare_output, show_progress="hidden")
+                        compare_b.change(fn=compare_features, inputs=[compare_a, compare_b], outputs=compare_output, show_progress="hidden")
+                    gr.HTML('<div class="insight-section"><div><h3>Interactive ML lab</h3><p>Move the controls to create a scenario, then run the saved model to see its output.</p></div><span class="tag">WHAT-IF SIMULATOR</span></div>')
+                    with gr.Group(elem_classes=["insights-panel"]):
+                        gr.HTML('<div class="insights-panel-title">Scenario controls</div><div class="insights-panel-sub">Fixed illustrative defaults for other fields: 2 dependents, Graduate, not self-employed, annual income 5,000,000, residential assets 5,000,000, commercial assets 2,000,000, luxury assets 8,000,000 and bank assets 3,000,000. Amounts use the original dataset units.</div>')
+                        with gr.Row():
+                            lab_cibil = gr.Slider(minimum=300, maximum=900, value=700, step=10, label="CIBIL score", interactive=True)
+                            lab_term = gr.Slider(minimum=2, maximum=20, value=10, step=1, label="Loan term (years)", interactive=True)
+                        lab_amount = gr.Slider(minimum=0, maximum=50_000_000, value=15_000_000, step=500_000, label="Loan amount · source dataset units", interactive=True)
+                        lab_run = gr.Button("Run what-if scenario →", elem_classes=["predict-btn"])
+                        lab_output = gr.HTML(value='<div class="lab-result"><div class="lab-label">READY FOR EXPLORATION</div><p>Adjust the sliders and run the scenario to see the saved model output.</p></div>')
+                        lab_run.click(fn=what_if_lab, inputs=[lab_cibil, lab_term, lab_amount], outputs=lab_output, show_progress="minimal")
+                        gr.HTML('<div class="insight-note"><strong>Explore carefully:</strong> run a baseline, then change one slider at a time. The lab shows how the model responds to selected inputs; it does not prove what causes approval.</div>')
+                    gr.HTML('<div class="insight-section"><div><h3>Global feature importance</h3><p>Reported Random Forest importance values across the project feature set.</p></div><span class="tag">GLOBAL SIGNALS</span></div>')
+                    with gr.Group(elem_classes=["insights-panel"]):
+                        gr.HTML(importance_bars())
+                    gr.HTML('<div class="disclaimer-banner"><strong>Limitations & responsible use.</strong> Metrics describe the reported test split only. Feature importance is not causality; estimated probabilities may not be calibrated; and these results do not establish fairness or real-world lending performance. This academic demonstration must not be used to make actual lending decisions.</div>')
             gr.HTML('<div class="footer"><span><b>CREDISENSE</b> · Loan approval prediction · ML portfolio project</span><span>Python · scikit-learn · Gradio</span><span>Educational use only</span></div>')
 
 if __name__ == "__main__":
