@@ -1,3 +1,163 @@
+"""Loan Approval Intelligence — premium Emerald & Champagne Gradio dashboard.
+Place app.py beside loan_approval_model.joblib in the repository root.
+Academic demonstration only; not a real lending decision system.
+"""
+from __future__ import annotations
+import html, logging, os
+from pathlib import Path
+from typing import Any
+import gradio as gr
+import joblib
+import pandas as pd
+
+logging.basicConfig(level=logging.INFO)
+LOGGER = logging.getLogger("loan_approval_app")
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_PATH = BASE_DIR / "loan_approval_model.joblib"
+FEATURE_COLUMNS = ["no_of_dependents", "education", "self_employed", "income_annum", "loan_amount", "loan_term", "cibil_score", "residential_assets_value", "commercial_assets_value", "luxury_assets_value", "bank_asset_value"]
+DEFAULT_VALUES = [2, "Graduate", "No", 5_000_000, 15_000_000, 10, 700, 5_000_000, 2_000_000, 8_000_000, 3_000_000]
+TEST_METRICS = {"Accuracy": 98.90, "Precision": 98.75, "Recall": 99.49, "F1-score": 99.12, "ROC-AUC": 99.81}
+FEATURE_IMPORTANCE = [("CIBIL score",81.81),("Loan term",5.68),("Loan amount",2.93),("Luxury assets",1.81),("Annual income",1.72),("Commercial assets",1.66),("Bank assets",1.54),("Residential assets",1.53),("Number of dependents",0.83),("Self-employed",0.26),("Education",0.21)]
+
+def first_present(mapping: dict[str, Any], candidates: list[str]) -> Any:
+    for key in candidates:
+        if mapping.get(key) is not None: return mapping[key]
+    return None
+
+if not MODEL_PATH.exists():
+    raise FileNotFoundError("Required file loan_approval_model.joblib was not found. Upload it to the same repository folder as app.py.")
+bundle = joblib.load(MODEL_PATH)
+PIPELINE = MODEL = PREPROCESSOR = None
+MODEL_NAME = "Random Forest"
+if isinstance(bundle, dict):
+    PIPELINE = first_present(bundle, ["pipeline", "model_pipeline", "full_pipeline"])
+    MODEL = first_present(bundle, ["model", "best_model", "selected_model", "classifier", "estimator", "trained_model"])
+    PREPROCESSOR = first_present(bundle, ["preprocessor", "preprocessing", "transformer", "feature_preprocessor"])
+    MODEL_NAME = str(bundle.get("model_name", MODEL_NAME))
+else:
+    PIPELINE = bundle if hasattr(bundle, "predict") else None
+if PIPELINE is None and (MODEL is None or PREPROCESSOR is None):
+    raise ValueError("The saved artifact loaded, but its estimator/preprocessor could not be identified. Check how loan_approval_model.joblib was saved.")
+
+def _result_card(state: str = "ready", message: str | None = None) -> str:
+    if state == "error":
+        return f'<section class="result-card result-error"><div class="eyebrow"><i class="dot"></i> ANALYSIS NEEDS ATTENTION</div><h3>Unable to complete analysis</h3><p>{html.escape(message or "Check the values and try again.")}</p></section>'
+    return '<section class="result-card result-empty"><div class="eyebrow"><i class="dot"></i> PREDICTION WORKSPACE</div><div class="result-symbol">✳</div><h3>Your result starts here.</h3><p>Complete the applicant profile and run the model to see its predicted class and estimated approval probability.</p><div class="step-line"><span>01 · Applicant data</span><i></i><span>02 · Model output</span></div></section>'
+
+def _probability_card(probability: float | None = None) -> str:
+    shown = None if probability is None else max(0.0, min(100.0, float(probability)))
+    value = "—" if shown is None else f"{shown:.2f}"
+    width = "0" if shown is None else f"{shown:.2f}"
+    foot = "Awaiting analysis" if shown is None else "Probability for the Approved class"
+    muted = " muted" if shown is None else ""
+    return f'<section class="glass-card probability-card"><div class="card-label-row"><span>Estimated approval probability</span><span class="tag">MODEL OUTPUT</span></div><div class="probability-value{muted}">{value}<small>%</small></div><div class="progress-track"><div class="progress-fill" style="width:{width}%"></div></div><div class="progress-caption"><span>{foot}</span><span>Not a guarantee</span></div></section>'
+
+def _is_approved(value: Any) -> bool:
+    return str(value).strip().lower() in {"approved", "1", "true"}
+
+def predict_loan(no_of_dependents, education, self_employed, income_annum, loan_amount, loan_term, cibil_score, residential_assets_value, commercial_assets_value, luxury_assets_value, bank_asset_value):
+    values = [no_of_dependents, education, self_employed, income_annum, loan_amount, loan_term, cibil_score, residential_assets_value, commercial_assets_value, luxury_assets_value, bank_asset_value]
+    if any(value is None for value in values):
+        return _result_card("error", "Complete every field before running the analysis."), _probability_card()
+    try:
+        numeric_values = [no_of_dependents, income_annum, loan_amount, loan_term, cibil_score, residential_assets_value, commercial_assets_value, luxury_assets_value, bank_asset_value]
+        if any(float(value) < 0 for value in numeric_values): return _result_card("error", "Numeric values cannot be negative."), _probability_card()
+        if not 0 <= int(no_of_dependents) <= 5: return _result_card("error", "Number of dependents must be between 0 and 5."), _probability_card()
+        if float(no_of_dependents) != int(no_of_dependents): return _result_card("error", "Number of dependents must be a whole number."), _probability_card()
+        if not 300 <= float(cibil_score) <= 900: return _result_card("error", "CIBIL score must be between 300 and 900."), _probability_card()
+        if float(cibil_score) != int(cibil_score): return _result_card("error", "CIBIL score must be a whole number."), _probability_card()
+        if not 2 <= float(loan_term) <= 20: return _result_card("error", "Loan term must be between 2 and 20, as in the source dataset."), _probability_card()
+        if float(loan_term) != int(loan_term): return _result_card("error", "Loan term must be a whole number."), _probability_card()
+        if education not in {"Graduate", "Not Graduate"}: return _result_card("error", "Choose one of the education categories."), _probability_card()
+        if self_employed not in {"Yes", "No"}: return _result_card("error", "Choose Yes or No for self-employment."), _probability_card()
+        applicant = pd.DataFrame([dict(zip(FEATURE_COLUMNS, values))], columns=FEATURE_COLUMNS)
+        applicant["education"] = applicant["education"].astype(str).str.strip()
+        applicant["self_employed"] = applicant["self_employed"].astype(str).str.strip()
+        if PIPELINE is not None:
+            prediction = PIPELINE.predict(applicant)[0]
+            probabilities = PIPELINE.predict_proba(applicant)[0] if hasattr(PIPELINE, "predict_proba") else None
+            classes = list(getattr(PIPELINE, "classes_", []))
+        else:
+            transformed = PREPROCESSOR.transform(applicant)
+            prediction = MODEL.predict(transformed)[0]
+            probabilities = MODEL.predict_proba(transformed)[0] if hasattr(MODEL, "predict_proba") else None
+            classes = list(getattr(MODEL, "classes_", []))
+        approved = _is_approved(prediction)
+        status = "Approved" if approved else "Rejected"
+        status_class = "result-approved" if approved else "result-rejected"
+        icon = "✓" if approved else "×"
+        copy = "The model classified this sample as approved based on the supplied features." if approved else "The model classified this sample as rejected based on the supplied features."
+        approval_probability = None
+        if probabilities is not None and classes:
+            idx = next((i for i, cls in enumerate(classes) if _is_approved(cls)), None)
+            if idx is not None: approval_probability = float(probabilities[idx]) * 100
+        safe_model = html.escape(MODEL_NAME)
+        result = f'<section class="result-card {status_class}"><div class="eyebrow"><i class="dot"></i> MODEL PREDICTION <span class="tag model-tag">{safe_model}</span></div><div class="result-heading"><span class="result-status-icon">{icon}</span><span>{status}</span></div><p>{copy}</p><div class="result-divider"></div><div class="detail-row"><span>Decision class</span><strong>{status}</strong></div><div class="detail-row"><span>Model</span><strong>{safe_model}</strong></div><div class="disclaimer">Academic demonstration only. This output is not a real bank decision, financial advice, or a guarantee of approval.</div></section>'
+        return result, _probability_card(approval_probability)
+    except Exception:
+        LOGGER.exception("Prediction failed")
+        return _result_card("error", "The model could not process these inputs. Check the values or review the server logs."), _probability_card()
+
+def apply_profile(profile: str):
+    profiles = {
+        "Balanced sample": [2,"Graduate","No",5_000_000,15_000_000,10,700,5_000_000,2_000_000,8_000_000,3_000_000],
+        "Strong credit profile": [1,"Graduate","No",8_000_000,12_000_000,8,820,12_000_000,6_000_000,10_000_000,7_000_000],
+        "Lower credit score": [3,"Not Graduate","Yes",2_000_000,18_000_000,18,480,1_000_000,500_000,1_500_000,200_000],
+    }
+    return [gr.update(value=value) for value in profiles[profile]]
+
+def reset_form():
+    return tuple(gr.update(value=value) for value in DEFAULT_VALUES) + (_result_card(), _probability_card())
+
+def metric_card(value: str, label: str, note: str = "") -> str:
+    v, l, n = map(html.escape, (value, label, note))
+    return f'<div class="metric-tile glass-card"><div class="metric-label">{l}</div><div class="metric-value">{v}</div><div class="metric-note">{n}</div></div>'
+
+def importance_bars() -> str:
+    rows = []
+    for label, value in FEATURE_IMPORTANCE:
+        rows.append(f'<div class="importance-row"><div class="importance-head"><span>{html.escape(label)}</span><strong>{value:.2f}%</strong></div><div class="progress-track"><div class="importance-fill" style="width:{value:.2f}%"></div></div></div>')
+    return '<div class="importance-list">' + ''.join(rows) + '</div>'
+
+FEATURE_EXPLANATIONS = {
+    "CIBIL score": "The CIBIL score dominates this model's reported importance (81.81%). In plain language, the Random Forest relies on credit-history score much more than any other listed feature. This is an association learned from this dataset, not proof of causation or a complete explanation of an individual prediction.",
+    "Loan term": "Loan term has 5.68% of the reported global importance. It represents the requested repayment duration as recorded in the source dataset; the importance value does not tell us whether a longer term always increases or decreases approval likelihood.",
+    "Loan amount": "Loan amount contributes 2.93% of reported importance. The model may use it alongside other applicant fields; this global score does not show the direction of its effect for a particular person.",
+    "Luxury assets": "Luxury assets contribute 1.81% of reported importance. The model learned patterns from the dataset, but this value does not establish that luxury assets cause approval.",
+    "Annual income": "Annual income contributes 1.72% of reported importance. Its influence may depend on interactions with other fields and on patterns present in the training data.",
+    "Commercial assets": "Commercial assets contribute 1.66% of reported importance. This is a global model statistic, not a personalized reason for a decision.",
+    "Bank assets": "Bank assets contribute 1.54% of reported importance. The percentage measures relative split-based importance in the reported analysis, not a causal effect.",
+    "Residential assets": "Residential assets contribute 1.53% of reported importance. This indicates comparatively small global importance in the reported list; it does not mean the field never matters.",
+    "Number of dependents": "Number of dependents contributes 0.83% of reported importance. A small global score can still interact with other inputs in individual predictions.",
+    "Self-employed": "Self-employment contributes 0.26% of reported importance. Its low global score means it contributed less to the reported tree splits than the higher-ranked features.",
+    "Education": "Education contributes 0.21% of reported importance, the smallest value in this list. This should not be interpreted as a general statement about education or creditworthiness outside this dataset.",
+}
+
+METRIC_EXPLANATIONS = {
+    "Accuracy": ("Overall correctness", "98.90%", "Of all test-set predictions, the reported share classified correctly. Accuracy can hide errors in one class if the dataset is imbalanced."),
+    "Precision": ("Reliability of predicted approvals", "98.75%", "Among cases predicted as Approved, the reported share were actually Approved in the test data. Higher precision means fewer false approvals in that evaluation."),
+    "Recall": ("Approved cases found", "99.49%", "Among truly Approved cases in the test data, the reported share were identified by the model. Recall is sensitive to missed approved cases."),
+    "F1-score": ("Precision–recall balance", "99.12%", "The harmonic mean of precision and recall. It summarizes both, but does not show the costs of different kinds of mistakes."),
+    "ROC-AUC": ("Class-ranking separation", "99.81%", "Summarizes how well the model ranks positive cases above negative cases across thresholds. It is not the same as accuracy and does not establish calibration or fairness."),
+}
+
+def feature_detail(feature: str) -> str:
+    value = dict(FEATURE_IMPORTANCE).get(feature, 0.0)
+    note = FEATURE_EXPLANATIONS.get(feature, "Choose a feature to explore its reported importance.")
+    return f'<div class="insight-detail"><div class="insight-kicker">FEATURE EXPLORER</div><div class="insight-detail-head"><h3>{html.escape(feature)}</h3><span class="insight-score">{value:.2f}% <small>importance</small></span></div><div class="progress-track insight-track"><div class="importance-fill" style="width:{value:.2f}%"></div></div><p>{html.escape(note)}</p><div class="insight-foot">Global feature importance · not causation · not an individual explanation</div></div>'
+
+def metric_detail(metric: str) -> str:
+    title, value, explanation = METRIC_EXPLANATIONS.get(metric, METRIC_EXPLANATIONS["Accuracy"])
+    return f'<div class="insight-detail"><div class="insight-kicker">METRIC EXPLORER</div><div class="insight-detail-head"><h3>{html.escape(metric)}</h3><span class="insight-score">{value}</span></div><div class="insight-label">{html.escape(title)}</div><p>{html.escape(explanation)}</p><div class="insight-foot">Reported test-split metric · results may differ on new data</div></div>'
+
+CSS = r"""
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
+:root{--bg:#0b2118;--line:rgba(222,201,153,.19);--ink:#f6f3e9;--gold:#dec18a;--emerald:#70c69a}
+html,body,.gradio-container{background:#0b2118!important;color:var(--ink)!important}body,.gradio-container{font-family:'DM Sans',sans-serif!important}.gradio-container{max-width:1580px!important;padding:18px 22px 32px!important;margin:auto!important}footer{display:none!important}
+body:before{content:'';position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at 70% 0%,rgba(82,150,109,.17),transparent 35%),radial-gradient(ellipse at 0% 70%,rgba(207,176,109,.08),transparent 32%)}
+.app-shell{gap:18px;align-items:flex-start}.sidebar{position:sticky;top:14px;min-height:calc(100vh - 50px);padding:20px 15px;border:1px solid var(--line);border-radius:23px;background:linear-gradient(155deg,rgba(29,63,48,.82),rgba(14,37,28,.88));backdrop-filter:blur(22px);box-shadow:0 20px 50px #0003,inset 0 1px #ffffff0d}
+.brand{display:flex;align-items:center;gap:10px;padding:4px 5px 22px;border-bottom:1px solid #dccda51c}.brand-icon{width:38px;height:38px;display:grid;place-items:center;border-radius:13px;background:linear-gradient(145deg,#e4ca91,#a5c69d);color:#173a2a;font-size:20px;font-weight:900}.brand-name{font:800 11px Manrope,sans-serif;letter-spacing:.3px}.brand-sub{font-size:8px;color:#9eafa1;margin-top:4px;letter-spacing:1.2px}.nav-label{font-size:9px;color:#728f7b;letter-spacing:1.7px;font-weight:800;margin:24px 8px 10px}.nav-item{display:flex;align-items:center;gap:10px;padding:12px 10px;border-radius:11px;color:#9db3a3;font-size:10px;font-weight:700;margin:4px 0}.nav-item.active{color:#f5e6bf;background:linear-gradient(100deg,#cab17629,#649e7717);border:1px solid #dac2882b}.nav-icon{width:25px;height:25px;display:grid;place-items:center;border-radius:8px;background:#ffffff0c}.sidebar-bottom{margin-top:28px;padding:13px;border:1px solid #dac28826;border-radius:14px;background:#ffffff08}.sidebar-bottom b{font-size:9px;color:#dfc78f}.sidebar-bottom p{font-size:9px;color:#91a696;line-height:1.7;margin:7px 0 0}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:5px 3px 16px}.breadcrumb{font-size:9px;color:#7f9a87}.breadcrumb b{color:#e6d3a5}.top-status{display:flex;align-items:center;gap:7px;border:1px solid #71be9033;background:#50996d15;border-radius:999px;padding:8px 11px;color:#b9d8c1;font-size:8px;font-weight:800}.live-dot,.dot{width:6px;height:6px;background:#77d9a2;border-radius:50%;display:inline-block;box-shadow:0 0 9px #77d9a255}
 .hero{position:relative;isolation:isolate;overflow:hidden;border-radius:24px;padding:28px 30px;margin-bottom:16px;background:linear-gradient(118deg,#183c2bf7,#1f4e36e8 58%,#646946c9);border:1px solid #dec9993d;box-shadow:0 24px 65px #0003,inset 0 1px #ffffff12}.hero:before{content:'';position:absolute;z-index:-1;width:350px;height:350px;right:-100px;top:-220px;border-radius:50%;border:1px solid #e5cf973d;box-shadow:0 0 0 34px #e5cf970a,0 0 0 70px #e5cf9707,0 0 80px #64c4901f}.hero-layout{display:flex;justify-content:space-between;align-items:center;gap:24px}.hero-copy{max-width:720px}.eyebrow{display:flex;align-items:center;gap:8px;color:#c1d4c1;text-transform:uppercase;letter-spacing:1.5px;font-size:8px;font-weight:800;margin-bottom:14px}.brand-mark{display:grid;place-items:center;width:27px;height:27px;border-radius:9px;background:#e3cc911f;border:1px solid #e3cc9147;color:#ead49c;font-size:14px}.hero h1{font:800 clamp(28px,3.2vw,42px)/1.08 Manrope,sans-serif!important;letter-spacing:-1.6px!important;color:#f8f4e9!important;margin:0 0 12px!important}.hero h1 em{font-style:normal;color:#e6cc91}.hero p{max-width:680px;color:#c0d1c1;font-size:11px;line-height:1.85;margin:0}.hero-chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:18px}.hero-chip{padding:7px 9px;border-radius:999px;border:1px solid #dfd7b82b;background:#ffffff0b;color:#e1e4d2;font-size:8px;font-weight:700}.hero-side{flex:0 0 175px;padding:16px;border:1px solid #e1cf9d3b;border-radius:17px;background:#ffffff12;backdrop-filter:blur(18px)}.hero-side-label{font-size:8px;color:#bdcbb7;font-weight:800;letter-spacing:1px;text-transform:uppercase}.hero-side-value{font:800 31px Manrope,sans-serif;color:#ead39b;letter-spacing:-1px;margin:8px 0 4px}.hero-side-caption{font-size:8px;line-height:1.7;color:#a9bda9}.hero-side-line{height:1px;background:#e4dab829;margin:12px 0}.hero-side-foot{font-size:8px;color:#d6e0ce;display:flex;justify-content:space-between;gap:6px}
 .section-heading{display:flex;justify-content:space-between;align-items:end;gap:10px;margin:21px 2px 12px}.section-heading h2{font:800 16px Manrope,sans-serif!important;color:#f1efdf!important;letter-spacing:-.4px!important;margin:0!important}.section-heading p{font-size:9px;color:#8ea591;margin:5px 0 0}.tag{font-size:7px;letter-spacing:1px;color:#e2c88d;border:1px solid #dcc18a3d;background:#dcc18a12;padding:6px 8px;border-radius:999px;font-weight:900;white-space:nowrap}
 .glass-card,.panel{background:linear-gradient(145deg,#214131bd,#10291ec7)!important;border:1px solid var(--line)!important;border-radius:17px!important;backdrop-filter:blur(20px);box-shadow:0 14px 35px #0002,inset 0 1px #ffffff0b!important}.panel{padding:17px!important;margin-bottom:12px!important}.panel-heading{display:flex;align-items:center;gap:10px;margin-bottom:5px}.panel-index{width:28px;height:28px;display:grid;place-items:center;border-radius:9px;background:#ddc2881a;border:1px solid #ddc28833;color:#e5cc91;font:800 9px Manrope,sans-serif}.panel-title{color:#f0efdf;font:800 11px Manrope,sans-serif}.panel-subtitle{font-size:9px;color:#8da592;line-height:1.7;margin:0 0 14px 38px}.preset-label{font-size:8px;color:#90a894;text-transform:uppercase;letter-spacing:1.1px;font-weight:800;margin:0 0 8px}
